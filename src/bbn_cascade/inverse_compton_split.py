@@ -56,42 +56,58 @@ def build_inverse_compton_moments(
             ):
                 if upper <= lower:
                     continue
-                photon = (upper - lower) * nodes / 2 + (upper + lower) / 2
-                photon_weight = weights * (upper - lower) / 2
-                rate_weight = (
-                    prefactor
-                    / electron**2
-                    * eps_weight
-                    * photon_weight
-                    * planck
-                    * jones_function(
-                        photon, electron, np.full_like(photon, epsilon)
-                    )
-                )
-                delta = photon - epsilon
-                total_loss[parent] += np.sum(rate_weight)
-                if is_soft:
-                    first_moment = rate_weight * delta
-                    drift[parent] += np.sum(first_moment)
-                    diffusion[parent] += np.sum(first_moment * delta)
-                    soft_energy[parent] += np.sum(first_moment)
-                    photon_target = soft_photon
-                else:
-                    hard_loss[parent] += np.sum(rate_weight)
-                    photon_target = hard_photon
-
-                for emitted, event_rate in zip(photon, rate_weight):
-                    child = np.searchsorted(boundaries, emitted, side="right") - 1
-                    if 0 <= child < n:
-                        photon_target[child, parent] += event_rate
+                # Integrate separately inside every outgoing-energy cell.
+                # Hard events are also split at mapped electron-cell faces.
+                cuts = [lower, upper]
+                cuts.extend(boundaries[(boundaries > lower) & (boundaries < upper)])
                 if not is_soft:
-                    for loss, event_rate in zip(delta, rate_weight):
-                        outgoing = electron - loss
-                        child = (
-                            np.searchsorted(boundaries, outgoing, side="right") - 1
+                    electron_cuts = electron + epsilon - boundaries
+                    cuts.extend(electron_cuts[(electron_cuts > lower) & (electron_cuts < upper)])
+                cuts = np.unique(cuts)
+                photon_target = soft_photon if is_soft else hard_photon
+
+                for segment_low, segment_high in zip(cuts[:-1], cuts[1:]):
+                    if segment_high <= segment_low:
+                        continue
+                    photon = (
+                        (segment_high - segment_low) * nodes / 2
+                        + (segment_high + segment_low) / 2
+                    )
+                    photon_weight = weights * (segment_high - segment_low) / 2
+                    rate_weight = (
+                        prefactor
+                        / electron**2
+                        * eps_weight
+                        * photon_weight
+                        * planck
+                        * jones_function(
+                            photon, electron, np.full_like(photon, epsilon)
                         )
-                        if 0 <= child < n:
-                            hard_electron[child, parent] += event_rate
+                    )
+                    event_rate = np.sum(rate_weight)
+                    delta = photon - epsilon
+                    total_loss[parent] += event_rate
+                    if is_soft:
+                        first_moment = rate_weight * delta
+                        drift[parent] += np.sum(first_moment)
+                        diffusion[parent] += np.sum(first_moment * delta)
+                        soft_energy[parent] += np.sum(first_moment)
+                    else:
+                        hard_loss[parent] += event_rate
+
+                    midpoint = 0.5 * (segment_low + segment_high)
+                    photon_child = np.searchsorted(
+                        boundaries, midpoint, side="right"
+                    ) - 1
+                    if 0 <= photon_child < n:
+                        photon_target[photon_child, parent] += event_rate
+                    if not is_soft:
+                        outgoing = electron + epsilon - midpoint
+                        electron_child = np.searchsorted(
+                            boundaries, outgoing, side="right"
+                        ) - 1
+                        if 0 <= electron_child < n:
+                            hard_electron[electron_child, parent] += event_rate
 
     return InverseComptonMoments(
         drift,
