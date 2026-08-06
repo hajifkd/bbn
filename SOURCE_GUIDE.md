@@ -123,3 +123,60 @@ Chang–Cooper重みを定義する。古い共通積分器も残っているが
 
 ### `src/bbn_cascade/hybrid_solver.py`
 
+
+本計算の中心。対数エネルギー格子を作り、上記2系統のcollision項を結合して
+光子・電子の定常方程式を疎行列として解く。
+
+電子soft IC項はChang–Cooper有限体積flux、hard ICとその他の反応は
+Boltzmann遷移行列として入る。低エネルギー端はoutflow、高エネルギー端は
+上側流入なし。解に許容値を超える負binがあれば例外にする。
+
+結果は`CascadeSpectrum`として返し、`to_csv()`でエネルギー、光子・電子
+スペクトル、各loss rateを保存できる。
+
+## 比較・CLI
+
+### `src/bbn_cascade/published.py`
+
+astro-ph/9412055 Table 1の`P_low`, `N_low`, `P_pp`, `N_pp`を保持し、論文の
+power-law fitを計算する。完全な数値計算ではなく比較表示専用。
+
+### `src/bbn_cascade/cli.py`
+
+- `bbn-cascade solve`: 1条件の定常スペクトルをCSVとPNGへ保存
+- `bbn-cascade reproduce-9412055`: Fig.1–3相当の6条件を計算
+
+後者はhybrid-FP数値解を実線、Table 1 fitを破線で描き、各数値解もCSVへ
+保存する。
+
+## 旧・実験的コード
+
+`solver.py`, `exact_solver.py`, `finite_solver.py`, `finite_volume.py`は開発途中の
+別方式であり、現在の公開APIやCLIからは使われない。内容が現行修正に追随して
+いない可能性があるため、物理結果の生成には使用しないこと。
+
+`config.py.rej`や`.orig`ファイルも失敗したパッチ・バックアップの残骸であり、
+実行時には参照されない。将来の整理対象である。
+
+## テスト
+
+`tests/`には断面積、微分kernel、Jones関数のsupport、FPモーメント、
+Chang–Cooper極限、Eq. (32) cutoff、定常solver、CLI単位変換のテストがある。
+
+```bash
+uv run pytest
+```
+
+現状のテスト数は11。粒子数・エネルギー収支、格子収束、完全Boltzmann比較は
+今後追加する予定である。
+
+## 最初に読む順序
+
+実際の計算を追う場合は、次の順序が分かりやすい。
+
+1. `config.py`と`sources.py`で入力を確認する。
+2. `hybrid_solver.py`の`CascadeSolver.solve()`から全体構造を見る。
+3. `hybrid_collision.py`で光子親のBoltzmann項を見る。
+4. `inverse_compton_split.py`でICのsoft/hard分割を見る。
+5. `kernels.py`と`processes.py`で個々の物理式を確認する。
+6. `cli.py`でFig.1–3の条件と出力方法を確認する。
