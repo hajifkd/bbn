@@ -1,0 +1,11 @@
+--- src/bbn_cascade/config.py
++++ src/bbn_cascade/config.py
+@@ -20,6 +20,8 @@
+         if self.grid_size < 40 or self.eta_baryon <= 0:
+             raise ValueError("grid_size >= 40 and eta_baryon > 0 are required")
++        if self.quadrature_order < 8:
++            raise ValueError("quadrature_order must be at least 8")
+         if not 0 <= self.helium_mass_fraction <= 1:
+ 
+ 
+ 

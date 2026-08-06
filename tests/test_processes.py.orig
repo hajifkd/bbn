@@ -1,0 +1,17 @@
+import numpy as np
+
+from bbn_cascade.constants import EV, M_E
+from bbn_cascade.hybrid_collision import HybridBoltzmannCollision
+from bbn_cascade.kernels import compton_kernel
+from bbn_cascade.processes import klein_nishina_total, nuclear_pair_total
+
+
+def test_cross_sections_are_nonnegative():
+    energy = np.geomspace(1e-6, 1e4, 200)
+    assert np.all(klein_nishina_total(energy) >= 0)
+    assert np.all(nuclear_pair_total(energy) >= 0)
+
+
+def test_nuclear_pair_threshold():
+    assert nuclear_pair_total(np.array([1.99 * M_E]))[0] == 0
+
