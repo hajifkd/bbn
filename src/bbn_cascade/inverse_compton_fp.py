@@ -134,3 +134,21 @@ def chang_cooper_weight(drift_velocity, diffusion, spacing):
     if w < -700:
         return 1 + 1 / w
     return 1 / w - 1 / np.expm1(w)
+
+
+def chang_cooper_flux_coefficients(energy_low, energy_high, drift_low, drift_high,
+                                   diffusion_low, diffusion_high):
+    """Coefficients of f_low, f_high in J=-b*f-(D*f)'/2.
+
+    D is the second Kramers--Moyal moment, not the coefficient of f''
+    alone. Its derivative therefore contributes to the advective flux.
+    """
+    spacing = energy_high - energy_low
+    if spacing <= 0:
+        raise ValueError("face energies must be increasing")
+    bface = .5*(drift_low + drift_high)
+    dface = .5*(diffusion_low + diffusion_high)
+    dprime = (diffusion_high - diffusion_low)/spacing
+    A, B = -bface - .5*dprime, .5*dface
+    delta = chang_cooper_weight(A, B, spacing)
+    return A*(1-delta)+B/spacing, A*delta-B/spacing

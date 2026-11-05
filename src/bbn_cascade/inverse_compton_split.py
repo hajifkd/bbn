@@ -6,6 +6,7 @@ from numpy.polynomial.legendre import leggauss
 from .constants import ALPHA, M_E, PI
 from .inverse_compton_fp import InverseComptonMoments, _energy_boundaries
 from .kernels import jones_function
+from .quadrature import thermal_quadrature
 
 
 def build_inverse_compton_moments(
@@ -38,10 +39,16 @@ def build_inverse_compton_moments(
         eps_max = min(electron - M_E**2 / (4 * electron), eps_global_max)
         if eps_max <= eps_min:
             continue
-        log_min, log_max = np.log(eps_min), np.log(eps_max)
-        log_eps = (log_max - log_min) * nodes / 2 + (log_max + log_min) / 2
-        eps_values = np.exp(log_eps)
-        eps_weights = weights * (log_max - log_min) / 2 * eps_values
+        # Thermal energy where the IC kinematic maximum crosses the
+        # soft/hard boundary: 4 E eps^2 - B eps + C = 0.
+        B = 4*electron**2 - M_E**2 - 4*electron*soft_fraction*kinetic
+        C = soft_fraction*kinetic*M_E**2
+        discriminant = B*B - 16*electron*C
+        thermal_cuts = []
+        if discriminant > 0 and B > 0:
+            thermal_cuts.append(2*C/(B+np.sqrt(discriminant)))
+        eps_values, eps_weights = thermal_quadrature(
+            eps_min, eps_max, temperature, quadrature_order, thermal_cuts)
         for epsilon, eps_weight in zip(eps_values, eps_weights):
             photon_max = 4 * epsilon * electron**2 / (
                 M_E**2 + 4 * epsilon * electron
@@ -66,48 +73,32 @@ def build_inverse_compton_moments(
                 cuts = np.unique(cuts)
                 photon_target = soft_photon if is_soft else hard_photon
 
-                for segment_low, segment_high in zip(cuts[:-1], cuts[1:]):
-                    if segment_high <= segment_low:
-                        continue
-                    photon = (
-                        (segment_high - segment_low) * nodes / 2
-                        + (segment_high + segment_low) / 2
-                    )
-                    photon_weight = weights * (segment_high - segment_low) / 2
-                    rate_weight = (
-                        prefactor
-                        / electron**2
-                        * eps_weight
-                        * photon_weight
-                        * planck
-                        * jones_function(
-                            photon, electron, np.full_like(photon, epsilon)
-                        )
-                    )
-                    event_rate = np.sum(rate_weight)
-                    delta = photon - epsilon
-                    total_loss[parent] += event_rate
-                    if is_soft:
-                        first_moment = rate_weight * delta
-                        drift[parent] += np.sum(first_moment)
-                        diffusion[parent] += np.sum(first_moment * delta)
-                        soft_energy[parent] += np.sum(first_moment)
-                    else:
-                        hard_loss[parent] += event_rate
-
-                    midpoint = 0.5 * (segment_low + segment_high)
-                    photon_child = np.searchsorted(
-                        boundaries, midpoint, side="right"
-                    ) - 1
-                    if 0 <= photon_child < n:
-                        photon_target[photon_child, parent] += event_rate
-                    if not is_soft:
-                        outgoing = electron + epsilon - midpoint
-                        electron_child = np.searchsorted(
-                            boundaries, outgoing, side="right"
-                        ) - 1
-                        if 0 <= electron_child < n:
-                            hard_electron[electron_child, parent] += event_rate
+                # Vectorize all daughter-cell panels for this thermal node.
+                # This keeps composite thermal integration affordable without
+                # changing the cell integrals or the soft/hard split.
+                left, right = cuts[:-1,None], cuts[1:,None]
+                photon = (right-left)*nodes/2+(right+left)/2
+                photon_weight = (right-left)*weights/2
+                rate_weight = (prefactor/electron**2*eps_weight*photon_weight*planck
+                               * jones_function(photon, electron, np.full_like(photon, epsilon)))
+                event_rate = np.sum(rate_weight, axis=1)
+                delta = photon-epsilon
+                total_loss[parent] += np.sum(event_rate)
+                if is_soft:
+                    first_moment = rate_weight*delta
+                    drift[parent] += np.sum(first_moment)
+                    diffusion[parent] += np.sum(first_moment*delta)
+                    soft_energy[parent] += np.sum(first_moment)
+                else:
+                    hard_loss[parent] += np.sum(event_rate)
+                midpoints = (cuts[:-1]+cuts[1:])/2
+                children = np.searchsorted(boundaries, midpoints, side="right")-1
+                valid = (children >= 0) & (children < n)
+                photon_target[:,parent] += np.bincount(children[valid], weights=event_rate[valid], minlength=n)
+                if not is_soft:
+                    children = np.searchsorted(boundaries, electron+epsilon-midpoints, side="right")-1
+                    valid = (children >= 0) & (children < n)
+                    hard_electron[:,parent] += np.bincount(children[valid], weights=event_rate[valid], minlength=n)
 
     return InverseComptonMoments(
         drift,

@@ -6,3 +6,8 @@ from .sources import MonochromaticPhotonSource
 
 __all__ = ["CascadeConfig", "CascadeSolver", "CascadeSpectrum", "MonochromaticPhotonSource"]
 
+
+from .photonuclear import REACTIONS, cross_section
+from .photodisintegration import calculate_rates
+
+__all__ += ["REACTIONS", "cross_section", "calculate_rates"]

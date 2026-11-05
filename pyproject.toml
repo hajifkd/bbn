@@ -8,6 +8,8 @@ dependencies = ["matplotlib>=3.8", "numpy>=1.26", "scipy>=1.12"]
 
 [project.scripts]
 bbn-cascade = "bbn_cascade.cli:main"
+bbn-decay = "bbn_cascade.bbn_decay:main"
+bbn-reheating = "bbn_cascade.reheating_cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

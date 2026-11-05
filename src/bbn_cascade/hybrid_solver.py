@@ -8,7 +8,7 @@ from scipy.sparse.linalg import spsolve
 
 from .config import CascadeConfig
 from .hybrid_collision import HybridBoltzmannCollision
-from .inverse_compton_fp import chang_cooper_weight
+from .inverse_compton_fp import chang_cooper_flux_coefficients
 from .inverse_compton_split import build_inverse_compton_moments
 from .processes import loss_rates
 from .published import published_spectrum
@@ -22,6 +22,7 @@ class CascadeSpectrum:
     electron: np.ndarray
     rates: dict[str, np.ndarray]
     diagnostics: dict[str, float]
+    boundaries: np.ndarray | None = None
 
     def to_csv(self, path) -> None:
         names = list(self.rates)
@@ -128,10 +129,11 @@ class CascadeSolver:
             "soft_energy_moment_max_relative_error": float(np.max(consistency)),
             "finite_volume": 1.0,
             "hybrid_fokker_planck": 1.0,
+            "fp_diffusion_gradient_in_flux": 1.0,
         }
-        return CascadeSpectrum(energy, full[0], full[1], rates, diagnostics)
+        return CascadeSpectrum(energy, full[0], full[1], rates, diagnostics, collision.boundaries)
 
-    def _linear_solve(
+    def _assemble_operator(
         self,
         energy,
         boundaries,
@@ -162,16 +164,12 @@ class CascadeSolver:
                             index(outgoing_species, child), index(species, parent)
                         ] += values[child]
 
-        # Internal Chang--Cooper fluxes. A=-b and B=D/2.
+        # Internal Chang--Cooper fluxes. J=-(b+D'/2)f-D f'/2.
         for face in range(1, n):
             low, high = face - 1, face
-            spacing = energy[high] - energy[low]
-            bface = 0.5 * (drift[low] + drift[high])
-            dface = 0.5 * (diffusion[low] + diffusion[high])
-            A, B = -bface, 0.5 * dface
-            delta = chang_cooper_weight(A, B, spacing)
-            coeff_low = A * (1 - delta) + B / spacing
-            coeff_high = A * delta - B / spacing
+            coeff_low, coeff_high = chang_cooper_flux_coefficients(
+                energy[low], energy[high], drift[low], drift[high],
+                diffusion[low], diffusion[high])
             e_low, e_high = index(1, low), index(1, high)
             # f=N/DeltaE; low cell receives -J, high cell receives +J.
             operator[e_low, e_low] -= coeff_low / widths[low]
@@ -179,11 +177,19 @@ class CascadeSolver:
             operator[e_high, e_low] += coeff_low / widths[low]
             operator[e_high, e_high] += coeff_high / widths[high]
 
-        # Low-energy outflow; upper boundary has zero flux.
+        # Low-energy advective outflow, with zero diffusive flux (D*f)'.
+        # The upper boundary has zero total flux.
         operator[index(1, 0), index(1, 0)] += -drift[0] / widths[0]
         source_vector = np.zeros(size)
         source_vector[index(0, n - 1)] = source.number_injection_rate
-        populations = spsolve((-operator).tocsr(), source_vector)
+        return (-operator).tocsr(), source_vector, widths
+
+    def _linear_solve(self, energy, boundaries, photon_loss, electron_hard_loss,
+                      transitions, drift, diffusion, source):
+        n=len(energy)
+        operator,source_vector,widths=self._assemble_operator(
+            energy,boundaries,photon_loss,electron_hard_loss,transitions,drift,diffusion,source)
+        populations = spsolve(operator, source_vector)
         spectra = np.vstack((populations[:n], populations[n:])) / widths
         maximum = max(float(np.max(np.abs(spectra))), np.finfo(float).tiny)
         tolerance = 1e-10 * maximum

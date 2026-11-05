@@ -75,23 +75,8 @@ class HybridBoltzmannCollision(CollisionIntegrals):
         boundaries = np.empty(n + 1)
         boundaries[1:-1] = np.sqrt(energy[:-1] * energy[1:])
         boundaries[0], boundaries[-1] = energy[0], energy[-1]
-        nodes, weights = leggauss(max(6, self.order // 2))
-
-        for parent, incoming in enumerate(energy):
-            for child in range(parent + 1):
-                low, high = boundaries[child], min(boundaries[child + 1], incoming)
-                if high <= low:
-                    continue
-                a, b = np.log(low), np.log(high)
-                points = np.exp((b - a) * nodes / 2 + (a + b) / 2)
-                integrated = np.zeros(2)
-                for point, weight in zip(points, weights):
-                    integrated += (
-                        weight
-                        * point
-                        * self._photon_parent_differential(point, incoming)
-                    )
-                transitions[:, 0, child, parent] = integrated * (b - a) / 2
+        for parent in range(n):
+            transitions[:, 0, :, parent] = self.photon_parent_column(energy, boundaries, parent)
 
         components = {
             "photon_photon": pp,
@@ -102,3 +87,28 @@ class HybridBoltzmannCollision(CollisionIntegrals):
         return HybridBoltzmannSystem(
             photon_loss, transitions, components, boundaries
         )
+
+    def photon_parent_column(self, energy, boundaries, parent):
+        """Cell-integrated daughters of one photon, also usable for balance checks."""
+        incoming = energy[parent]
+        column = np.zeros((2, len(energy)))
+        nodes, weights = leggauss(max(6, self.order // 2))
+        for child in range(parent + 1):
+            low, high = boundaries[child], min(boundaries[child + 1], incoming)
+            if high <= low:
+                continue
+            # Resolve both members of a pair: a log grid in E alone
+            # undersamples the narrow E ~ incoming endpoint.
+            reflected = incoming - boundaries
+            compton_min = incoming / (1 + 2*incoming/M_E)
+            candidates = np.r_[reflected, M_E, incoming-M_E,
+                               compton_min, incoming+M_E-compton_min]
+            cuts = np.unique(np.r_[low, candidates[(candidates > low) & (candidates < high)], high])
+            integrated = np.zeros(2)
+            for left, right in zip(cuts[:-1], cuts[1:]):
+                a, b = np.log(left), np.log(right)
+                points = np.exp((b-a)*nodes/2+(a+b)/2)
+                for point, weight in zip(points, weights):
+                    integrated += weight*point*(b-a)/2*self._photon_parent_differential(point, incoming)
+            column[:, child] = integrated
+        return column

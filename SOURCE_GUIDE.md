@@ -180,3 +180,25 @@ uv run pytest
 4. `inverse_compton_split.py`でICのsoft/hard分割を見る。
 5. `kernels.py`と`processes.py`で個々の物理式を確認する。
 6. `cli.py`でFig.1–3の条件と出力方法を確認する。
+
+## 熱浴と出射端の複合求積（2026-09-17更新）
+
+`quadrature.py` は `epsilon/T` の熱分布を小区間に分けたGauss求積を提供する。
+`kernels.py` の対生成の全率・微分kernelと、公開経路の
+`inverse_compton_split.py` が使用する。ICではsoft/hard分割が開始する
+熱浴エネルギーも区間境界に加える。
+
+`hybrid_collision.py` の `photon_parent_column()` は、出射格子だけでなく
+`E_in - E_out` に写した格子でも積分区間を分ける。電子の高エネルギー端の
+細い分布を、カスケード格子全体を増やさずに積分するための処理である。
+
+`tests/test_composite_quadrature.py` でPlanck分布の粒子数・エネルギーモーメント、
+対生成の粒子数・エネルギー収支、ICの求積次数依存を確認する。
+`reproduce-9412055` はスペクトルと図に加え、各条件のJSONとセル境界NPYを保存する。
+
+### FPフラックスのD微分項
+
+`inverse_compton_fp.py` の `chang_cooper_flux_coefficients()` が
+`J=-(b+D'/2)f-D*f'/2` のface係数を計算する。公開solverはこの関数を使う。
+`tests/test_fp_flux.py` にDのエネルギー依存を含む解析的検証がある。
+`compare_fp_flux_grids.py` は修正後の120/240点/decadeを比較する。

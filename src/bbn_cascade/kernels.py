@@ -6,6 +6,7 @@ import numpy as np
 from numpy.polynomial.legendre import leggauss
 
 from .constants import ALPHA, M_E, PI, R_E
+from .quadrature import gauss_rule, thermal_integral
 from .processes import background_target_densities, klein_nishina_total, nuclear_pair_total
 
 M2 = M_E**2
@@ -19,7 +20,7 @@ def _bose_weight(x, temperature):
 def _log_integral(function, lower, upper, order):
     if upper <= lower or lower <= 0 or not np.isfinite(lower):
         return 0.0
-    nodes, weights = leggauss(order)
+    nodes, weights = gauss_rule(order)
     a, b = np.log(lower), np.log(upper)
     lx = (b - a) * nodes / 2 + (a + b) / 2
     x = np.exp(lx)
@@ -107,27 +108,33 @@ class CollisionIntegrals:
         lower = M2 / photon
         if lower >= self.tmax:
             return 0.0
-        nodes, weights = leggauss(self.order)
+        nodes, weights = gauss_rule(self.order)
         def over_background(bg):
             result = np.zeros_like(bg)
             for k, x in enumerate(bg):
                 slo, shi = 4 * M2, 4 * photon * x
                 if shi <= slo:
                     continue
-                ls = (np.log(shi) - np.log(slo)) * nodes / 2 + (np.log(shi) + np.log(slo)) / 2
-                s = np.exp(ls)
-                beta = np.sqrt(1 - 4 * M2 / s)
-                sigma = PI * R_E**2 / 2 * (1 - beta**2) * ((3 - beta**4) * np.log((1 + beta) / (1 - beta)) - 2 * beta * (2 - beta**2))
-                result[k] = (np.log(shi) - np.log(slo)) / 2 * np.sum(weights * s**2 * sigma)
+                # u=sqrt(log(s/4m_e^2)) removes the square-root threshold.
+                # Composite panels also resolve the broad high-energy range.
+                umax = np.sqrt(np.log(shi/slo))
+                cuts = np.linspace(0., umax, max(1, int(np.ceil(umax/.5)))+1)
+                a, b = cuts[:-1,None], cuts[1:,None]
+                u = (b-a)*nodes/2+(a+b)/2
+                s = slo*np.exp(u*u)
+                beta = np.sqrt(-np.expm1(-u*u))
+                sigma = PI * R_E**2 / 2 * (1-beta**2) * (
+                    (3-beta**4)*np.log((1+beta)/(1-beta))-2*beta*(2-beta**2))
+                result[k] = np.sum((b-a)/2*weights*2*u*s*s*sigma)
             return _bose_weight(bg, self.T) / bg * result
-        return _log_integral(over_background, lower, self.tmax, self.order) / (8 * photon**2)
+        return thermal_integral(over_background, lower, self.tmax, self.T, self.order) / (8 * photon**2)
 
     def inverse_compton_photon(self, out_energy, in_energy):
         if in_energy < out_energy + M_E:
             return 0.0
         lo = M2 * out_energy / (4 * in_energy * (in_energy - out_energy))
         hi = min(out_energy, in_energy - M2 / (4 * in_energy), self.tmax)
-        integral = _log_integral(lambda x: jones_function(out_energy, in_energy, x) * _bose_weight(x, self.T), lo, hi, self.order)
+        integral = thermal_integral(lambda x: jones_function(out_energy, in_energy, x) * _bose_weight(x, self.T), lo, hi, self.T, self.order)
         return 2 * PI * ALPHA**2 * integral / in_energy**2
 
     def inverse_compton_electron(self, out_energy, in_energy):
@@ -140,7 +147,7 @@ class CollisionIntegrals:
             return 0.0
         lo = -p / 2 - np.sqrt(disc)
         hi = min(-p / 2 + np.sqrt(disc), in_energy - M2 / (4 * in_energy), self.tmax)
-        integral = _log_integral(lambda x: jones_function(in_energy + x - out_energy, in_energy, x) * _bose_weight(x, self.T), lo, hi, self.order)
+        integral = thermal_integral(lambda x: jones_function(in_energy + x - out_energy, in_energy, x) * _bose_weight(x, self.T), lo, hi, self.T, self.order)
         return 2 * PI * ALPHA**2 * integral / in_energy**2
 
     def double_pair_electron(self, out_energy, in_energy):
@@ -151,17 +158,17 @@ class CollisionIntegrals:
             return 0.0
         root = np.sqrt(out_energy**2 - M2)
         den = 4 * in_energy * d + M2
-        z1 = in_energy * (M2 - 2 * d * (root - out_energy)) / den
+        z1 = in_energy * (M2 + 2 * d * M2 / (root + out_energy)) / den
         z2 = in_energy * (M2 + 2 * d * (root + out_energy)) / den
         lo, hi = max(M2 / in_energy, z1), min(z2, in_energy, self.tmax)
-        integral = _log_integral(lambda x: pair_function(out_energy, in_energy, x) / (PI**2 * np.expm1(x / self.T)), lo, hi, self.order)
+        integral = thermal_integral(lambda x: pair_function(out_energy, in_energy, x) / (PI**2 * np.expm1(x / self.T)), lo, hi, self.T, self.order)
         return PI * ALPHA**2 * M2 * integral / (2 * in_energy**3)  # e- plus e+
 
     def inverse_compton_rate(self, electron):
         lo, hi = self.T * 1e-8, min(electron - M2 / (4 * electron), self.tmax)
         if hi <= lo:
             return 0.0
-        nodes, weights = leggauss(self.order)
+        nodes, weights = gauss_rule(self.order)
         def over_background(bg):
             result = np.zeros_like(bg)
             for k, x in enumerate(bg):
@@ -172,7 +179,7 @@ class CollisionIntegrals:
                 result[k] = (ymax - x) / 2 * np.sum(weights * jones_function(photons, electron, np.full_like(photons, x)))
             # Eq. (47): f_BB(x)/x = x/[pi^2(exp(x/T)-1)].
             return result * _bose_weight(bg, self.T)
-        return 2 * PI * ALPHA**2 * _log_integral(over_background, lo, hi, self.order) / electron**2
+        return 2 * PI * ALPHA**2 * thermal_integral(over_background, lo, hi, self.T, self.order) / electron**2
 
     def build(self, energy):
         energy = np.asarray(energy)

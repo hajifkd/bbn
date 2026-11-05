@@ -1,11 +1,16 @@
 import argparse
 import csv
+import json
+from dataclasses import asdict
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .config import CascadeConfig
+from .config import CascadeConfig, DEFAULT_POINTS_PER_DECADE
 from .constants import EV, MEV
 from .hybrid_solver import CascadeSolver
 from .published import table_parameters
@@ -26,7 +31,8 @@ def solve_command(args):
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
     e0, temp = _energy(args.energy), _energy(args.temperature)
-    cfg = CascadeConfig(temp, e0, grid_size=args.grid_size, mode=args.mode)
+    cfg = CascadeConfig(temp, e0, grid_size=args.grid_size, mode=args.mode,
+                        points_per_decade=args.points_per_decade)
     result = CascadeSolver(cfg).solve(MonochromaticPhotonSource(e0))
     result.to_csv(out / "spectrum.csv")
     fig, ax = plt.subplots()
@@ -46,20 +52,23 @@ def reproduce_command(args):
     rows = []
     for figure, e0 in enumerate((1e4, 1e3, 1e2), start=1):
         fig, ax = plt.subplots(figsize=(6.4, 4.8))
-        if args.grid_size is None:
-            decades = np.log10(e0 / MEV)
-            grid_size = int(np.ceil(args.points_per_decade * decades)) + 1
-        else:
-            grid_size = args.grid_size
+        grid_size = CascadeConfig(EV, e0, grid_size=args.grid_size,
+                                  points_per_decade=args.points_per_decade).grid_size
         for temp_ev, color in ((1.0, "tab:blue"), (100.0, "tab:orange")):
             cfg = CascadeConfig(
-                temp_ev * EV, e0, grid_size=grid_size,
+                temp_ev * EV, e0, grid_size=grid_size, points_per_decade=args.points_per_decade,
                 quadrature_order=args.quadrature_order,
                 soft_fraction=args.soft_fraction,
             )
             result = CascadeSolver(cfg).solve()
             stem = f"E0_{e0:g}GeV_T_{temp_ev:g}eV".replace("+", "")
             result.to_csv(out / f"{stem}.csv")
+            np.save(out / f"{stem}_boundaries.npy", result.boundaries)
+            (out / f"{stem}.json").write_text(json.dumps({
+                "config": asdict(cfg), "diagnostics": result.diagnostics,
+                "integration": "composite thermal panels + reflected daughter boundaries",
+            }, indent=2) + "\n")
+            print(f"computed {stem}, grid={grid_size}, order={args.quadrature_order}", flush=True)
             mask = result.photon > 0
             ax.plot(result.energy[mask], np.log10(result.photon[mask]), color=color,
                     label=rf"$T={temp_ev:g}\,\mathrm{{eV}}$ (hybrid FP)")
@@ -93,17 +102,21 @@ def reproduce_command(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="bbn-cascade")
     sub = parser.add_subparsers(required=True)
+    from .rate_cli import add_rates_parser
+    add_rates_parser(sub)
     solve = sub.add_parser("solve", help="calculate one stationary spectrum")
     solve.add_argument("--energy", default="1TeV")
     solve.add_argument("--temperature", default="1eV")
     solve.add_argument("--mode", choices=("transport", "published-fit"), default="transport")
-    solve.add_argument("--grid-size", type=int, default=400)
+    solve.add_argument("--grid-size", type=int, default=None,
+                       help="fixed grid size (overrides --points-per-decade)")
+    solve.add_argument("--points-per-decade", type=float, default=DEFAULT_POINTS_PER_DECADE)
     solve.add_argument("--output", default="results/solve")
     solve.set_defaults(func=solve_command)
     reproduce = sub.add_parser("reproduce-9412055", help="reproduce paper Figs. 1-3")
     reproduce.add_argument("--grid-size", type=int, default=None,
                            help="fixed grid size (overrides --points-per-decade)")
-    reproduce.add_argument("--points-per-decade", type=float, default=60.0)
+    reproduce.add_argument("--points-per-decade", type=float, default=DEFAULT_POINTS_PER_DECADE)
     reproduce.add_argument("--quadrature-order", type=int, default=8)
     reproduce.add_argument("--soft-fraction", type=float, default=0.05)
     reproduce.add_argument("--output", default="results/9412055")

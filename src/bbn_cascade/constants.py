@@ -10,6 +10,8 @@ PI = np.pi
 EV = 1.0e-9
 MEV = 1.0e-3
 TEV = 1.0e3
+HBAR_GEV_S = 6.582119569e-25
+MB_TO_GEV_MINUS2 = 1.0 / 0.3893793721
 
 
 def photon_number_density(temperature: float) -> float:
